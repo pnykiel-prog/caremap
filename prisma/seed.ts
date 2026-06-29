@@ -3518,6 +3518,105 @@ async function main() {
   }
   console.log(`Historical trend surveys: ${histCreated}`);
 
+  // ── Rozszerzona historia ankiet (progres/regres) dla 20 seniorów ───────────
+  // Każdy z wybranych seniorów (s-004…s-023) dostaje 5–14 ankiet rozłożonych
+  // w czasie, pokazujących trajektorię stanu opieki. Wzorce:
+  //   improve  — stopniowa poprawa (np. po rehabilitacji)
+  //   decline  — stopniowe pogorszenie (wiek, choroby przewlekłe)
+  //   crisis   — nagły kryzys i częściowy powrót
+  //   wave     — wahania stanu w czasie
+  const levelToPct: Record<number, number> = {
+    1: 88, 2: 72, 3: 56, 4: 41, 5: 27, 6: 16, 7: 8,
+  };
+  const clampLevel = (l: number) => Math.max(1, Math.min(7, Math.round(l)));
+
+  function trajectory(pattern: string, n: number): number[] {
+    const out: number[] = [];
+    for (let k = 0; k < n; k++) {
+      const t = n === 1 ? 0 : k / (n - 1); // 0..1
+      let lvl: number;
+      switch (pattern) {
+        case "improve": lvl = 6 - t * 4.5; break;
+        case "decline": lvl = 1.5 + t * 4.5; break;
+        case "crisis": lvl = 3 + Math.sin(t * Math.PI) * 3.5; break;
+        default: lvl = 4 + Math.sin(t * Math.PI * 2) * 2; break; // wave
+      }
+      out.push(clampLevel(lvl));
+    }
+    return out;
+  }
+
+  const PATTERNS = ["improve", "decline", "crisis", "wave"];
+  const historyTargets = SENIORS.slice(3, 23); // pierwsze 3 mają już historię wyżej
+  let extHistCreated = 0;
+  let extAlertsCreated = 0;
+
+  for (let si = 0; si < historyTargets.length; si++) {
+    const senior = historyTargets[si];
+    const pattern = PATTERNS[si % PATTERNS.length];
+    const n = 5 + (si % 10); // 5..14 ankiet
+    const levels = trajectory(pattern, n);
+    const spanDays = n * 45;
+
+    for (let k = 0; k < n; k++) {
+      const level = levels[k];
+      const base = levelToPct[level];
+      const jit = (kk: number) =>
+        Math.max(2, Math.min(99, base + ((si + kk) % 5) - 2));
+      const daysAgo = Math.round(30 + ((n - 1 - k) / (n - 1)) * spanDays);
+      const d = new Date();
+      d.setDate(d.getDate() - daysAgo);
+      const id = `hist-${senior.id}-${k + 1}`;
+
+      await prisma.survey.upsert({
+        where: { id },
+        update: {},
+        create: {
+          id,
+          organizationId: org.id,
+          templateId: template.id,
+          seniorId: senior.id,
+          filledById: admin.id,
+          status: "COMPLETED",
+          careLevel: level,
+          k1Score: jit(1),
+          k2Score: jit(2),
+          k3Score: jit(3),
+          k4Score: jit(4),
+          completedAt: d,
+          createdAt: d,
+        },
+      });
+      extHistCreated++;
+
+      // Historyczny alert (zarchiwizowany) dla bardzo wysokich poziomów
+      if (level >= 6) {
+        const aId = `alert-${id}`;
+        const handled = new Date();
+        handled.setDate(handled.getDate() - daysAgo + 5);
+        await prisma.alert.upsert({
+          where: { id: aId },
+          update: {},
+          create: {
+            id: aId,
+            organizationId: org.id,
+            surveyId: id,
+            careLevel: level,
+            status: "RESOLVED",
+            handledById: admin.id,
+            handledNote: "Zarchiwizowano (dane historyczne demo)",
+            handledAt: handled,
+            createdAt: d,
+          },
+        });
+        extAlertsCreated++;
+      }
+    }
+  }
+  console.log(
+    `Extended history: ${extHistCreated} surveys for ${historyTargets.length} seniors (archived alerts: ${extAlertsCreated})`,
+  );
+
   console.log("Seeding completed successfully!");
 }
 
