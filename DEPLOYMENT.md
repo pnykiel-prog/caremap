@@ -1,12 +1,12 @@
 # Wdrożenie na Vercel (integracja GitHub)
 
-Aplikacja CareMap (Next.js 16 + Prisma 7 + PostgreSQL) znajduje się w katalogu
-[`caremap-main/`](./caremap-main).
+Aplikacja CareMap (Next.js 16 + Prisma 7 + PostgreSQL) znajduje się w **głównym
+katalogu repozytorium**.
 
 ## 1. Import projektu
 
 1. Wejdź na https://vercel.com/new i wybierz repozytorium `pnykiel-prog/caremap`.
-2. **Root Directory:** ustaw na `caremap-main` (aplikacja jest w podkatalogu).
+2. **Root Directory:** zostaw domyślne (`./`). Aplikacja jest w roocie repo.
 3. **Framework Preset:** Next.js (wykrywany automatycznie).
 4. Build Command / Install Command / Output — zostaw domyślne.
    `prisma generate` uruchamia się automatycznie w `postinstall`.
@@ -26,7 +26,7 @@ Ustaw w **Project → Settings → Environment Variables** (Production + Preview
 | `RESEND_API_KEY`        | opcjon.  | Tylko wysyłka e-maili (zatwierdzanie podmiotów, zaproszenia ankieterów). |
 | `RESEND_FROM`           | opcjon.  | Adres nadawcy, np. `noreply@caremap.pl`. |
 
-Wzorzec: [`caremap-main/.env-example`](./caremap-main/.env-example).
+Wzorzec: [`.env-example`](./.env-example).
 
 ## 3. Schemat bazy danych
 
@@ -34,7 +34,6 @@ Build Vercela **nie** aplikuje schematu do bazy. Przed pierwszym uruchomieniem
 zastosuj schemat do swojej produkcyjnej bazy (jednorazowo, lokalnie):
 
 ```bash
-cd caremap-main
 # wskaż produkcyjną bazę:
 export DIRECT_URL="<twój_direct_connection_string>"
 npx prisma db push
