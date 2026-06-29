@@ -1,0 +1,716 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+generator clientJs {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  SENIOR
+  FAMILY_CAREGIVER
+  SOCIAL_WORKER
+  NURSE
+  GP_DOCTOR
+  MUNICIPALITY_WORKER
+  VOLUNTEER
+  NGO_COORDINATOR
+  PROVIDER_MANAGER
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+  SUSPENDED
+}
+
+enum TemplateStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SurveyStatus {
+  DRAFT
+  COMPLETED
+  REPORT_SENT
+}
+
+enum AlertStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum IdentificationConfidence {
+  NEW_RECORD
+  NAME_DOB
+  NAME_DOB_EXTRA
+  STAFF_CONFIRMED
+}
+
+enum CoverageType {
+  ADDRESS_ONLY
+  RADIUS
+  CITY_LIST
+}
+
+enum ProviderStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  LIMITED
+  FULL
+  SUSPENDED
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+  DISMISSED
+}
+
+// ─── Surveyor module enums ────────────────────────────────────────────────────
+
+enum SurveyorEntityType {
+  POZ
+  CUS
+  CARE_COMPANY
+  NGO
+  HOSPICE
+  OTHER
+}
+
+enum SurveyorEntityStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum SurveyorMembershipRole {
+  ENTITY_MANAGER
+  ENTITY_SURVEYOR
+}
+
+enum SurveyorMembershipStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum SurveyorObserverSource {
+  FILLED_SURVEY
+  ENTITY_MANAGER
+  SELF_REGISTERED
+}
+
+enum AuditAction {
+  VIEW
+  CREATE
+  UPDATE
+  DELETE
+  EXPORT
+  APPROVE
+  REJECT
+  SUSPEND
+}
+
+enum NotificationChannel {
+  PUSH
+  EMAIL
+  SMS
+}
+
+enum NotificationKind {
+  NEW_SURVEY
+  CARE_LEVEL_ALERT
+  RE_SURVEY_DUE
+  NEW_REGISTRATION
+  ENTITY_APPROVED
+  PATIENT_TRANSFERRED
+}
+
+// ─── Auth (NextAuth.js) ───────────────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Organization ─────────────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  address   String?
+  city      String?
+  logoText  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users               User[]
+  seniors             Senior[]
+  surveys             Survey[]
+  surveyTemplates     SurveyTemplate[]
+  providers           Provider[]
+  alerts              Alert[]
+  settings            OrganizationSettings?
+  surveyorEntityLinks SurveyorEntityGmina[]
+  auditLogs           AuditLog[]
+}
+
+// ─── Organization settings (P-09, P-10, ANK-16) ───────────────────────────────
+
+model OrganizationSettings {
+  id                    String       @id @default(cuid())
+  organizationId        String       @unique
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // P-10 — channels enabled per organization (MVP: tylko PUSH; v2.0 admin może włączyć email/sms)
+  channelPush           Boolean      @default(true)
+  channelEmail          Boolean      @default(false)
+  channelSms            Boolean      @default(false)
+
+  // P-09 — automatyczna wysyłka PDF do seniora po wypełnieniu ankiety
+  autoSendPdfToSenior   Boolean      @default(false)
+  sendPdfOnlyIfConsent  Boolean      @default(true)
+
+  // Domyślne MOPS/GOPS (GM-04 fallback gdy brak dopasowanego podmiotu)
+  fallbackMopsName      String?
+  fallbackMopsPhone     String?
+  fallbackMopsEmail     String?
+
+  // Interwały re-ankietowania (miesiące) — domyślne wartości wg GM-01/GM-07
+  reSurveyMonthsHigh    Int          @default(3)   // poziom 6-7
+  reSurveyMonthsMid     Int          @default(6)   // poziom 4-5
+  reSurveyMonthsLow     Int          @default(12)  // poziom 1-3
+
+  updatedAt             DateTime     @updatedAt
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────────
+
+model User {
+  id             String     @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  email          String     @unique
+  name           String
+  password       String?
+  emailVerified  DateTime?
+  image          String?
+  role           UserRole   @default(MUNICIPALITY_WORKER)
+  // P-06 — dual role: dodatkowe konteksty i aktualnie wybrany
+  additionalRoles UserRole[] @default([])
+  activeContext   String?    // "jst" | "senior" | "surveyor" | "manager"
+
+  phone          String?
+  institution    String?
+  position       String?
+  department     String?
+  relation       String?
+  pwz            String?
+  krs            String?
+  status         UserStatus @default(PENDING)
+  rejectionNote  String?
+  approvedById   String?
+  approvedBy     User?      @relation("Approvals", fields: [approvedById], references: [id])
+  approvedUsers  User[]     @relation("Approvals")
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  filledSurveys       Survey[]              @relation("FilledBy")
+  surveyorSurveys     Survey[]              @relation("SurveyorUser")
+  ownedSeniors        Senior[]              @relation("SeniorOwner")
+  accounts            Account[]
+  sessions            Session[]
+  memberships         SurveyorMembership[]
+  patientAssignments  PatientAssignment[]   @relation("PatientAssignmentsForSurveyor")
+  assignedByMe        PatientAssignment[]   @relation("PatientAssignmentsAssignedBy")
+  consentsCollected   PatientConsent[]      @relation("ConsentCollectedBy")
+  observerLinks       SurveyObserver[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  approvedEntities    SurveyorEntity[]      @relation("EntityApprovedBy")
+  approvedEntityGminy SurveyorEntityGmina[] @relation("EntityGminaApprovedBy")
+  invitationsCreated  EntityInvitation[]    @relation("InvitationCreatedBy")
+}
+
+// ─── Senior ───────────────────────────────────────────────────────────────────
+
+model Senior {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  firstName      String
+  lastName       String
+  dateOfBirth    DateTime
+  gender         String?
+
+  address        String?
+  postalCode     String?
+  city           String?
+  phone          String?
+  email          String?
+
+  geoLat         Float?
+  geoLon         Float?
+
+  // GM-05 — identyfikacja powracającego seniora
+  // pseudonimId: stabilny wewnętrzny ID łączący wszystkie ankiety tej samej osoby
+  // Nullable — backfill istniejących rekordów; nowe generowane w kodzie aplikacji.
+  pseudonimId    String?  @unique
+  // peselHash: bcrypt hash PESEL — nie da się odczytać, tylko porównać
+  peselHash      String?
+
+  // Konto seniora w portalu /portal/senior (opcjonalne — senior może mieć dostęp do swoich danych)
+  ownerUserId    String?
+  ownerUser      User?    @relation("SeniorOwner", fields: [ownerUserId], references: [id])
+
+  identificationConfidence IdentificationConfidence @default(NEW_RECORD)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  surveys        Survey[]
+  reminders      Reminder[]
+  assignments    PatientAssignment[]
+  consents       PatientConsent[]
+  observers      SurveyObserver[]
+}
+
+// ─── Survey Template ──────────────────────────────────────────────────────────
+
+model SurveyTemplate {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  name           String
+  description    String?
+  // ARCH-02 — rodzaj ankiety: SCREENING (przesiewowa 5-10 pyt.), FULL (K1-K4), PROGRAM (pod konkretny program), SPECIALIZED
+  kind           String         @default("FULL")
+  version        Int            @default(1)
+  status         TemplateStatus @default(DRAFT)
+  isDefault      Boolean        @default(false)
+  publishedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  sections       TemplateSection[]
+  surveys        Survey[]
+}
+
+model TemplateSection {
+  id          String   @id @default(cuid())
+  templateId  String
+  template    SurveyTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  code        String
+  title       String
+  description String?
+  order       Int
+  maxScore    Int      @default(0)
+
+  questions   TemplateQuestion[]
+}
+
+model TemplateQuestion {
+  id         String   @id @default(cuid())
+  sectionId  String
+  section    TemplateSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  code       String
+  text       String
+  order      Int
+  isRequired Boolean  @default(true)
+  options    Json
+
+  answers    SurveyAnswer[]
+}
+
+// ─── Survey ───────────────────────────────────────────────────────────────────
+
+model Survey {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  templateId     String
+  template       SurveyTemplate @relation(fields: [templateId], references: [id])
+  seniorId       String
+  senior         Senior       @relation(fields: [seniorId], references: [id])
+  filledById     String
+  filledBy       User         @relation("FilledBy", fields: [filledById], references: [id])
+
+  // GM-01 — dane reportera (ankietera) oddzielone od seniora
+  reporterName   String?
+  reporterPhone  String?
+  reporterEmail  String?
+  reporterRole   String?
+
+  k1Score        Float?
+  k2Score        Float?
+  k3Score        Float?
+  k4Score        Float?
+  careLevel      Int?
+
+  previousSurveyId String?
+  previousSurvey   Survey?  @relation("SurveyChain", fields: [previousSurveyId], references: [id])
+  followUpSurveys  Survey[] @relation("SurveyChain")
+  answerDelta      Json?
+
+  // ANK-01 — powiązanie z podmiotem ankietującym (v2.0; w MVP nullable)
+  surveyorEntityId String?
+  surveyorEntity   SurveyorEntity? @relation(fields: [surveyorEntityId], references: [id])
+  surveyorUserId   String?
+  surveyorUser     User?    @relation("SurveyorUser", fields: [surveyorUserId], references: [id])
+
+  reportPath     String?
+  reportSentAt   DateTime?
+
+  status         SurveyStatus @default(DRAFT)
+  completedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  answers        SurveyAnswer[]
+  alerts         Alert[]
+}
+
+model SurveyAnswer {
+  id                  String   @id @default(cuid())
+  surveyId            String
+  survey              Survey   @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  questionId          String
+  question            TemplateQuestion @relation(fields: [questionId], references: [id])
+  value               Int
+  changedFromPrevious Boolean  @default(false)
+  previousValue       Int?
+
+  @@unique([surveyId, questionId])
+}
+
+// ─── Alert ────────────────────────────────────────────────────────────────────
+
+model Alert {
+  id             String      @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  surveyId       String
+  survey         Survey      @relation(fields: [surveyId], references: [id])
+  careLevel      Int
+  status         AlertStatus @default(OPEN)
+  handledById    String?
+  handledNote    String?
+  handledAt      DateTime?
+  createdAt      DateTime    @default(now())
+}
+
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
+model Provider {
+  id             String         @id @default(cuid())
+  organizationId String
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+
+  name           String
+  type           String
+  city           String
+  address        String?
+  postalCode     String?
+  phone          String?
+  email          String?
+  website        String?
+  description    String?
+  capacity       Int            @default(0)
+
+  coverageType   CoverageType   @default(ADDRESS_ONLY)
+  coverageRadius Int?
+  coverageCities Json?
+  geoLat         Float?
+  geoLon         Float?
+
+  status         ProviderStatus @default(PENDING)
+  rejectionNote  String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  services           ProviderService[]
+  availability       ProviderAvailability[]
+  availabilityHistory ProviderAvailabilityHistory[]
+}
+
+model ProviderService {
+  id          String   @id @default(cuid())
+  providerId  String
+  provider    Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  serviceCode String
+  priceMin    Float    @default(0)
+  priceMax    Float    @default(0)
+  priceUnit   String   @default("miesiac")
+
+  @@unique([providerId, serviceCode])
+}
+
+model ProviderAvailability {
+  id           String             @id @default(cuid())
+  providerId   String
+  provider     Provider           @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  date         String
+  status       AvailabilityStatus
+  freePlaces   Int                @default(0)
+  waitTime     String?
+  notes        String?
+  freeServices Json?
+  updatedAt    DateTime           @default(now())
+
+  @@unique([providerId, date])
+}
+
+// M3-04 — historia dostępności (snapshoty do analityki trendów podaży)
+model ProviderAvailabilityHistory {
+  id           String             @id @default(cuid())
+  providerId   String
+  provider     Provider           @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  date         String
+  status       AvailabilityStatus
+  freePlaces   Int                @default(0)
+  waitTime     String?
+  freeServices Json?
+  recordedAt   DateTime           @default(now())
+
+  @@index([providerId, recordedAt])
+}
+
+// ─── Reminder ─────────────────────────────────────────────────────────────────
+
+model Reminder {
+  id            String         @id @default(cuid())
+  seniorId      String
+  senior        Senior         @relation(fields: [seniorId], references: [id])
+  targetEmail   String
+  targetName    String
+  scheduledAt   DateTime
+  sentAt        DateTime?
+  status        ReminderStatus @default(PENDING)
+  lastSurveyId  String?
+  careLevel     Int?
+  createdAt     DateTime       @default(now())
+}
+
+// ─── Moduł ankieterów (ANK-01 .. ANK-18) ─────────────────────────────────────
+
+// Podmiot profesjonalny (POZ/CUS/firma opieki) działający w systemie
+model SurveyorEntity {
+  id              String               @id @default(cuid())
+  name            String
+  type            SurveyorEntityType
+  status          SurveyorEntityStatus @default(PENDING)
+  nip             String?
+  address         String?
+  postalCode      String?
+  city            String?
+  phone           String?
+  email           String?
+  description     String?
+
+  // Manager kontaktowy z momentu rejestracji (dla flow weryfikacji)
+  contactManagerName  String?
+  contactManagerEmail String?
+
+  // Zatwierdzenie przez admina systemu (P-11) — globalnie
+  approvedById    String?
+  approvedBy      User?    @relation("EntityApprovedBy", fields: [approvedById], references: [id])
+  approvedAt      DateTime?
+  rejectionNote   String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships     SurveyorMembership[]
+  gminaLinks      SurveyorEntityGmina[]
+  patients        PatientAssignment[]
+  consents        PatientConsent[]
+  surveys         Survey[]
+  invitations     EntityInvitation[]
+}
+
+// P-12 — podmiot działa w wielu gminach; każda gmina zatwierdza go osobno
+model SurveyorEntityGmina {
+  id             String               @id @default(cuid())
+  entityId       String
+  entity         SurveyorEntity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id])
+  status         SurveyorEntityStatus @default(PENDING)
+  approvedById   String?
+  approvedBy     User?                @relation("EntityGminaApprovedBy", fields: [approvedById], references: [id])
+  approvedAt     DateTime?
+  rejectionNote  String?
+  createdAt      DateTime             @default(now())
+
+  @@unique([entityId, organizationId])
+}
+
+// Przynależność pracownika do podmiotu — manager lub ankieter
+model SurveyorMembership {
+  id           String                   @id @default(cuid())
+  userId       String
+  user         User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entityId     String
+  entity       SurveyorEntity           @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  role         SurveyorMembershipRole
+  status       SurveyorMembershipStatus @default(PENDING)
+  invitedById  String?
+  createdAt    DateTime                 @default(now())
+  suspendedAt  DateTime?
+
+  @@unique([userId, entityId])
+}
+
+// Zaproszenia pracowników do podmiotu (jednorazowe linki, 48h)
+model EntityInvitation {
+  id          String   @id @default(cuid())
+  entityId    String
+  entity      SurveyorEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  email       String
+  role        SurveyorMembershipRole @default(ENTITY_SURVEYOR)
+  token       String   @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdById String
+  createdBy   User     @relation("InvitationCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+}
+
+// Przypisanie pacjenta do konkretnego ankietera w ramach podmiotu
+model PatientAssignment {
+  id              String   @id @default(cuid())
+  seniorId        String
+  senior          Senior   @relation(fields: [seniorId], references: [id], onDelete: Cascade)
+  surveyorUserId  String
+  surveyorUser    User     @relation("PatientAssignmentsForSurveyor", fields: [surveyorUserId], references: [id])
+  entityId        String
+  entity          SurveyorEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  assignedById    String?
+  assignedBy      User?    @relation("PatientAssignmentsAssignedBy", fields: [assignedById], references: [id])
+  isActive        Boolean  @default(true)
+  transferredFromId String?
+  assignedAt      DateTime @default(now())
+
+  @@unique([seniorId, entityId])
+}
+
+// ANK-08 — zgoda RODO per podmiot
+model PatientConsent {
+  id              String   @id @default(cuid())
+  seniorId        String
+  senior          Senior   @relation(fields: [seniorId], references: [id], onDelete: Cascade)
+  entityId        String
+  entity          SurveyorEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  consentGiven    Boolean  @default(true)
+  consentDate     DateTime @default(now())
+  withdrawnAt     DateTime?
+  collectedById   String?
+  collectedBy     User?    @relation("ConsentCollectedBy", fields: [collectedById], references: [id])
+  scope           String?  // np. "DATA_PROCESSING", "PDF_REPORT", "REMINDER_EMAIL"
+
+  @@unique([seniorId, entityId])
+}
+
+// ANK-14 — obserwatorzy seniora (kto dostaje powiadomienia o nowych ankietach)
+model SurveyObserver {
+  id        String   @id @default(cuid())
+  seniorId  String
+  senior    Senior   @relation(fields: [seniorId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source    SurveyorObserverSource @default(FILLED_SURVEY)
+  addedAt   DateTime @default(now())
+
+  @@unique([seniorId, userId])
+}
+
+// ─── Audit log (SEC-02) ───────────────────────────────────────────────────────
+
+model AuditLog {
+  id             String      @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  userId         String?
+  user           User?       @relation(fields: [userId], references: [id])
+  action         AuditAction
+  resource       String      // np. "senior", "survey", "alert", "entity"
+  resourceId     String?
+  ip             String?
+  userAgent      String?
+  justification  String?
+  metadata       Json?
+  createdAt      DateTime    @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@index([resource, resourceId])
+}
+
+// ─── Notifications (in-app, push, email, sms — ANK-14, ANK-16) ────────────────
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      NotificationKind
+  channel   NotificationChannel @default(PUSH)
+  title     String
+  body      String
+  url       String?
+  readAt    DateTime?
+  sentAt    DateTime?
+  payload   Json?
+  createdAt DateTime            @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
