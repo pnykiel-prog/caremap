@@ -55,11 +55,30 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, user }) {
+      // Przy logowaniu dane pochodzą z authorize()
       if (user) {
         token.id = user.id;
         token.role = (user as { role?: string }).role;
         token.organizationId = (user as { organizationId?: string }).organizationId;
         token.organizationName = (user as { organizationName?: string }).organizationName;
+        return token;
+      }
+
+      // Auto-naprawa sesji: przy kolejnych żądaniach odśwież dane z bazy po emailu.
+      // Dzięki temu token wystawiony przed zmianą/resetem danych (np. po wgraniu
+      // nowego zestawu z innym ID organizacji) sam się aktualizuje — bez ręcznego
+      // wylogowywania.
+      if (token.email) {
+        const dbUser = await prisma.user.findUnique({
+          where: { email: token.email },
+          include: { organization: true },
+        });
+        if (dbUser) {
+          token.id = dbUser.id;
+          token.role = dbUser.role;
+          token.organizationId = dbUser.organizationId;
+          token.organizationName = dbUser.organization?.name ?? "";
+        }
       }
       return token;
     },
